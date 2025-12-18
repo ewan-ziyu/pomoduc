@@ -1,0 +1,43 @@
+:root {
+  --bg-color: #f5f5f5;
+  --text-color: #333333;
+  --accent-color: #ff6b6b;
+  /* Soft Red */
+  --secondary-color: #e0e0e0;
+  --surface-color: #ffffff;
+  --font-main: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-main);
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  line-height: 1.5;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  /* Prevent body scroll, handle inside app */
+  transition: background-color 0.3s ease;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+/* Scrollbar styling for a cleaner look */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--secondary-color);
+  border-radius: 3px;
+}

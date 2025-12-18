@@ -1,0 +1,13 @@
+/* Component specific styles can go here or be modularized */
+.app-container {
+  width: 100%;
+  height: 100%;
+  background: var(--surface-color);
+  /* border-radius: 16px; Removed for window fill */
+  /* box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); Removed for window fill */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* .mini-mode style is now handled inline for better control over the specific bar shape */
