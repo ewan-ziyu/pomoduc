@@ -40,6 +40,12 @@ export const TimerProvider = ({ children }) => {
     };
   });
 
+  // History
+  const [history, setHistory] = useState(() => {
+    const saved = localStorage.getItem('pomoduc_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   // Timer State
   const [timeLeft, setTimeLeft] = useState(settings.focusDuration * 60);
   const [isActive, setIsActive] = useState(false);
@@ -52,6 +58,7 @@ export const TimerProvider = ({ children }) => {
   useEffect(() => localStorage.setItem('pomoduc_tasks', JSON.stringify(tasks)), [tasks]);
   useEffect(() => localStorage.setItem('pomoduc_active_task', JSON.stringify(activeTaskId)), [activeTaskId]);
   useEffect(() => localStorage.setItem('pomoduc_stats', JSON.stringify(stats)), [stats]);
+  useEffect(() => localStorage.setItem('pomoduc_history', JSON.stringify(history)), [history]);
 
   // Reset timer when settings change (if not active)
   useEffect(() => {
@@ -123,8 +130,25 @@ export const TimerProvider = ({ children }) => {
     // Rule: Work time less than 10 minutes is not included in stats
     // Rule: Break time is not included (covered by mode check)
     if (mode !== 'focus' || settings.focusDuration < 10) return;
+
+    // Create history record
+    const now = new Date();
+    const taskDuration = settings.focusDuration;
+    const activeTaskObj = tasks.find(t => t.id === activeTaskId) || { name: 'Unknown' };
+
+    const newRecord = {
+      id: Date.now(),
+      endTime: now.toISOString(),
+      startTime: new Date(now.getTime() - taskDuration * 60000).toISOString(),
+      duration: taskDuration, // in minutes
+      taskId: activeTaskId,
+      taskName: activeTaskObj.name
+    };
+
+    setHistory(prev => [...prev, newRecord]);
+
+    // Update daily stats (legacy support + optimization)
     setStats(prev => {
-      const taskDuration = settings.focusDuration;
       const newByTask = { ...prev.byTask };
       newByTask[activeTaskId] = (newByTask[activeTaskId] || 0) + taskDuration;
 
@@ -178,7 +202,7 @@ export const TimerProvider = ({ children }) => {
       settings, setSettings,
       tasks, addTask, deleteTask,
       activeTaskId, setActiveTaskId, getActiveTask,
-      stats,
+      stats, history,
       timeLeft, isActive, toggleTimer, resetTimer, mode
     }}>
       {children}
