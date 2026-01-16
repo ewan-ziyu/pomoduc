@@ -1,190 +1,336 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTimer } from '../context/TimerContext';
 import { formatDuration } from '../utils/formatTime';
+import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay, addDays } from 'date-fns';
+import { zhCN, enUS } from 'date-fns/locale';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+
+const locales = {
+    'en-US': enUS,
+    'zh-CN': zhCN,
+};
+
+const localizer = dateFnsLocalizer({
+    format,
+    parse,
+    startOfWeek: (date) => startOfWeek(date, { weekStartsOn: 1 }),
+    getDay,
+    locales,
+});
 
 const StatsView = () => {
     const { history, settings } = useTimer();
-    const [viewMode, setViewMode] = useState('daily'); // 'daily' | 'weekly'
+    const [view, setView] = useState(Views.DAY);
+    const [date, setDate] = useState(new Date());
+    const [zoomLevel, setZoomLevel] = useState(1); // 1 = 1x, up to 5x
+    const calendarWrapperRef = useRef(null);
 
-    // Helper to filter history for a specific date range
-    const getHistoryForDate = (date) => {
-        const targetDate = date.toLocaleDateString();
-        return history.filter(item => {
-            const itemDate = new Date(item.endTime).toLocaleDateString();
-            return itemDate === targetDate;
-        });
-    };
-
-    // Helper to get last 7 days data
-    const weeklyData = useMemo(() => {
-        const days = [];
-        for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
-            const dateStr = d.toLocaleDateString();
-            const dayName = d.toLocaleDateString(navigator.language, { weekday: 'short' });
-
-            const daySessions = history.filter(item => {
-                // Use endTime for attribution
-                return new Date(item.endTime).toLocaleDateString() === dateStr;
-            });
-
-            const totalMinutes = daySessions.reduce((acc, curr) => acc + curr.duration, 0);
-            days.push({ dayName, totalMinutes, dateStr });
-        }
-        return days;
+    // Transform history to RBC events
+    const events = useMemo(() => {
+        return history.map(session => ({
+            id: session.id,
+            title: session.taskName || 'Focus',
+            start: new Date(session.startTime),
+            end: new Date(session.endTime),
+            resource: session,
+        }));
     }, [history]);
 
-    // Today's Stats
-    const today = new Date();
-    const todaySessions = getHistoryForDate(today);
-    const todayMinutes = todaySessions.reduce((acc, curr) => acc + curr.duration, 0);
-    const todayCount = todaySessions.length;
+    const handleNavigate = useCallback((newDate) => setDate(newDate), []);
+    const handleViewChange = useCallback((newView) => setView(newView), []);
 
-    // Timeline Calculation
-    // We map 00:00 - 24:00 to 0% - 100%
-    const timelineItems = useMemo(() => {
-        const startOfDay = new Date(today);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(today);
-        endOfDay.setHours(23, 59, 59, 999);
+    // Date Navigation Handlers
+    const goToPrev = () => setDate(prev => addDays(prev, view === Views.DAY ? -1 : -7));
+    const goToNext = () => setDate(prev => addDays(prev, view === Views.DAY ? 1 : 7));
+    const goToToday = () => setDate(new Date());
 
-        return todaySessions.map(session => {
-            const sessionStart = new Date(session.startTime);
-            const sessionEnd = new Date(session.endTime);
+    // Zoom on Ctrl + Scroll
+    useEffect(() => {
+        const wrapper = calendarWrapperRef.current;
+        if (!wrapper) return;
 
-            // Calculate intersection with today
-            const effectiveStart = sessionStart < startOfDay ? startOfDay : sessionStart;
-            const effectiveEnd = sessionEnd > endOfDay ? endOfDay : sessionEnd;
+        const handleWheel = (e) => {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? -0.2 : 0.2;
+                setZoomLevel(prev => Math.min(Math.max(prev + delta, 1), 5));
+            }
+        };
 
-            if (effectiveEnd <= effectiveStart) return null;
+        wrapper.addEventListener('wheel', handleWheel, { passive: false });
+        return () => wrapper.removeEventListener('wheel', handleWheel);
+    }, []);
 
-            // Convert to minutes from midnight (0 - 1440)
-            const getMins = (d) => d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+    // Calendar Time Range based on Settings
+    const { minDate, maxDate } = useMemo(() => {
+        const [startH, startM] = (settings.dayStart || "00:00").split(':').map(Number);
+        const [endH, endM] = (settings.dayEnd || "23:59").split(':').map(Number);
 
-            const startMins = getMins(effectiveStart);
-            const endMins = getMins(effectiveEnd);
-            const totalDayMinutes = 24 * 60;
+        const min = new Date();
+        min.setHours(startH, startM, 0, 0);
 
-            const left = (startMins / totalDayMinutes) * 100;
-            const width = ((endMins - startMins) / totalDayMinutes) * 100;
+        const max = new Date();
+        max.setHours(endH, endM, 59, 999);
 
-            return {
-                ...session,
-                left: `${left}%`,
-                width: `${width}%`
-            };
-        }).filter(Boolean);
-    }, [todaySessions]);
+        return { minDate: min, maxDate: max };
+    }, [settings.dayStart, settings.dayEnd]);
+
+    // Calculate daily totals for the currently displayed week
+    const weeklyTotals = useMemo(() => {
+        if (view !== Views.WEEK) return [];
+        const start = startOfWeek(date, { weekStartsOn: 1 });
+        return Array.from({ length: 7 }, (_, i) => {
+            const day = addDays(start, i);
+            const dayStr = format(day, 'yyyy-MM-dd');
+            const total = history.reduce((acc, session) => {
+                const sessionDate = format(new Date(session.startTime), 'yyyy-MM-dd');
+                return sessionDate === dayStr ? acc + session.duration : acc;
+            }, 0);
+            return total;
+        });
+    }, [date, history, view]);
+
+    // Custom styles for the calendar
+    const calendarStyles = useMemo(() => ({
+        height: view === Views.WEEK ? 'calc(100vh - 250px)' : 'calc(100vh - 180px)',
+        '--zoom-factor': zoomLevel,
+    }), [zoomLevel, view]);
 
     return (
-        <div style={{ padding: '2rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
-                <div style={{
-                    background: '#eee', padding: '4px', borderRadius: '8px', display: 'flex', gap: '4px'
-                }}>
-                    <button
-                        onClick={() => setViewMode('daily')}
-                        style={{
-                            padding: '0.4rem 1.2rem', borderRadius: '6px', border: 'none',
-                            background: viewMode === 'daily' ? 'white' : 'transparent',
-                            boxShadow: viewMode === 'daily' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                            cursor: 'pointer', fontWeight: 500
-                        }}
-                    >
-                        Daily
-                    </button>
-                    <button
-                        onClick={() => setViewMode('weekly')}
-                        style={{
-                            padding: '0.4rem 1.2rem', borderRadius: '6px', border: 'none',
-                            background: viewMode === 'weekly' ? 'white' : 'transparent',
-                            boxShadow: viewMode === 'weekly' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                            cursor: 'pointer', fontWeight: 500
-                        }}
-                    >
-                        Weekly
-                    </button>
+        <div className="stats-container" style={{
+            padding: '1rem',
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+        }}>
+            {/* Header / Controls */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '1rem',
+                flexWrap: 'wrap',
+                gap: '8px'
+            }}>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                    <button onClick={() => handleViewChange(Views.DAY)} className={`view-btn ${view === Views.DAY ? 'active' : ''}`}>Daily</button>
+                    <button onClick={() => handleViewChange(Views.WEEK)} className={`view-btn ${view === Views.WEEK ? 'active' : ''}`}>Weekly</button>
                 </div>
+
+                {/* Date Navigation */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <button onClick={goToPrev} className="nav-arrow-btn">←</button>
+                    <div style={{
+                        fontSize: '0.9rem',
+                        fontWeight: 600,
+                        textAlign: 'center',
+                        color: 'var(--text-color)',
+                        padding: '0 4px'
+                    }}>
+                        {format(date, view === Views.DAY ? 'MMM dd, yyyy' : "'Week of' MMM dd")}
+                    </div>
+                    <button onClick={goToNext} className="nav-arrow-btn">→</button>
+                </div>
+
+                <button onClick={goToToday} className="today-btn">Today</button>
             </div>
 
-            {viewMode === 'daily' && (
-                <div style={{ animation: 'fadeIn 0.3s ease' }}>
-                    <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-                        <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '0.5rem' }}>Today's Focus</div>
-                        <div style={{ fontSize: '3rem', fontWeight: 700, color: 'var(--text-color)' }}>
-                            {Math.floor(todayMinutes / 60)}<span style={{ fontSize: '1rem' }}>h</span> {todayMinutes % 60}<span style={{ fontSize: '1rem' }}>m</span>
-                        </div>
-                        <div style={{ fontSize: '1rem', color: '#999', marginTop: '0.5rem' }}>
-                            {todayCount} sessions
-                        </div>
-                    </div>
-
-                    <div style={{ marginBottom: '1rem' }}>
-                        <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '1rem' }}>Timeline (24h)</div>
-                        {/* Timeline Container */}
-                        <div style={{
-                            position: 'relative', height: '40px', background: '#f0f0f0', borderRadius: '6px',
-                            overflow: 'hidden'
-                        }}>
-                            {/* Hour Markers (0, 6, 12, 18) - Optional but helpful */}
-                            {[0, 6, 12, 18, 24].map(h => (
-                                <div key={h} style={{
-                                    position: 'absolute', left: `${(h / 24) * 100}%`, height: '100%',
-                                    borderLeft: '1px solid #ddd', fontSize: '0.7rem', color: '#aaa',
-                                    paddingLeft: '4px', paddingTop: '22px'
-                                }}>
-                                    {h !== 24 ? h : ''}
-                                </div>
-                            ))}
-
-                            {timelineItems.map(item => (
-                                <div key={item.id}
-                                    title={`${item.taskName}: ${new Date(item.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(item.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                                    style={{
-                                        position: 'absolute',
-                                        left: item.left,
-                                        width: Math.max(parseFloat(item.width), 0.5) + '%', // Min width for visibility
-                                        height: '60%', top: '20%',
-                                        background: 'var(--text-color)',
-                                        borderRadius: '4px',
-                                        cursor: 'help'
-                                    }}
-                                />
-                            ))}
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#999', marginTop: '0.5rem' }}>
-                            <span>00:00</span>
-                            <span>12:00</span>
-                            <span>23:59</span>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {viewMode === 'weekly' && (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '8px', height: '300px', paddingBottom: '2rem', animation: 'fadeIn 0.3s ease' }}>
-                    {weeklyData.map((day, i) => {
-                        const maxMins = Math.max(...weeklyData.map(d => d.totalMinutes), 60); // Scale based on max, min 60
-                        const heightPct = (day.totalMinutes / maxMins) * 100;
-
+            {/* Weekly Bar Chart Summary */}
+            {view === Views.WEEK && (
+                <div className="weekly-bar-summary" style={{
+                    display: 'flex',
+                    height: '60px',
+                    marginBottom: '10px',
+                    borderBottom: '1px solid #f0f0f0',
+                    paddingBottom: '5px'
+                }}>
+                    <div className="gutter-spacer" style={{ width: '80px' }} />
+                    {weeklyTotals.map((total, i) => {
+                        const maxMins = Math.max(...weeklyTotals, 60);
+                        const heightPct = (total / maxMins) * 100;
                         return (
-                            <div key={i} style={{
-                                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%'
-                            }}>
-                                <div style={{ marginBottom: '0.5rem', fontSize: '0.8rem', fontWeight: 600 }}>{day.totalMinutes > 0 ? day.totalMinutes : ''}</div>
+                            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.65rem', color: '#888', marginBottom: '2px' }}>
+                                    {total > 0 ? formatDuration(total) : ''}
+                                </span>
                                 <div style={{
-                                    width: '100%', height: `${Math.max(heightPct, 2)}%`,
-                                    background: day.totalMinutes > 0 ? 'var(--text-color)' : '#eee',
-                                    borderRadius: '4px 4px 0 0',
-                                    transition: 'height 0.5s ease'
+                                    width: '30%',
+                                    height: `${Math.max(heightPct, 0)}%`,
+                                    background: 'var(--text-color)',
+                                    opacity: 0.2,
+                                    borderRadius: '2px 2px 0 0'
                                 }} />
-                                <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#666' }}>{day.dayName}</div>
                             </div>
                         );
                     })}
                 </div>
             )}
+
+            {/* Calendar Wrapper */}
+            <div ref={calendarWrapperRef} className="calendar-wrapper" style={calendarStyles}>
+                <Calendar
+                    localizer={localizer}
+                    events={events}
+                    startAccessor="start"
+                    endAccessor="end"
+                    view={view}
+                    onView={handleViewChange}
+                    date={date}
+                    onNavigate={handleNavigate}
+                    views={[Views.DAY, Views.WEEK]}
+                    toolbar={false}
+                    step={15}
+                    timeslots={4}
+                    min={minDate}
+                    max={maxDate}
+                    components={{
+                        event: ({ event }) => (
+                            <div className="custom-event" title={`${event.title}: ${format(event.start, 'HH:mm')} - ${format(event.end, 'HH:mm')}`}>
+                                <div className="event-title">{event.title}</div>
+                                {zoomLevel > 2 && <div className="event-time">{format(event.start, 'HH:mm')} - {format(event.end, 'HH:mm')}</div>}
+                            </div>
+                        )
+                    }}
+                />
+            </div>
+
+            <style>{`
+                .view-btn {
+                    padding: 0.4rem 1.2rem;
+                    border: none;
+                    background: #f0f0f0;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 0.9rem;
+                    transition: all 0.2s;
+                    font-weight: 500;
+                }
+                .view-btn.active {
+                    background: var(--text-color);
+                    color: white;
+                }
+                
+                .nav-arrow-btn {
+                    background: none;
+                    border: 1px solid #eee;
+                    border-radius: 4px;
+                    width: 30px;
+                    height: 30px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 1rem;
+                }
+                .nav-arrow-btn:hover {
+                    background: #f9f9f9;
+                    border-color: #ddd;
+                }
+                
+                .today-btn {
+                    padding: 0.2rem 0.6rem;
+                    background: white;
+                    border: 2px solid #6d6d6dff;
+                    border-radius: 24px;
+                    font-size: 0.7rem;
+                    cursor: pointer;
+                    font-weight: 500;
+                    transition: all 0.2s;
+                }
+                .today-btn:hover {
+                    background: #ddddddff;
+                }
+                
+                /* 左侧时间轴标签样式 */
+                .rbc-label {
+                    font-size: 0.75rem;
+                    color: #888;
+                    font-weight: 200;
+                    padding-right: 20px !important;
+                }
+
+                /* 固定 gutter 宽度以配合上方柱状图对齐 */
+                .rbc-time-gutter {
+                    width: 80px !important;
+                }
+                
+                /* Zoom Implementation */
+                .calendar-wrapper .rbc-time-content {
+                    overflow-y: auto;
+                }
+                .calendar-wrapper .rbc-timeslot-group {
+                    min-height: calc(40px * var(--zoom-factor)) !important;
+                }
+                
+                /* Glassmorphism Events */
+                .calendar-wrapper .rbc-event {
+                    background: rgba(var(--accent-rgb, 0,0,0), 0.05) !important;
+                    border: 1px solid rgba(var(--accent-rgb, 0,0,0), 0.1) !important;
+                    backdrop-filter: blur(4px);
+                    color: var(--text-color) !important;
+                    border-radius: 1px !important;
+                    padding: 2px 8px !important;
+                    transition: transform 0.2s;
+                }
+                .calendar-wrapper .rbc-event:hover {
+                    transform: scale(1.01);
+                    z-index: 10;
+                    box-shadow: 0 4px 12px rgba(144, 144, 144, 0.1);
+                }
+                .custom-event {
+                    height: 100%;
+                    display: flex;
+                    flex-direction: row; /* 改为横向排列 */
+                    align-items: center;
+                    gap: 8px;
+                    overflow: hidden;
+                }
+                .event-title {
+                    font-weight: 400;
+                    font-size: 0.8rem;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+                .event-time {
+                    font-size: 0.7rem;
+                    color: #888;
+                    white-space: nowrap;
+                }
+
+                /* RBC Overrides */
+                .rbc-calendar {
+                    font-family: inherit;
+                }
+                .rbc-header {
+                    padding: 10px 0 !important;
+                    font-weight: 600 !important;
+                    border-bottom: 2px solid #f0f0f0 !important;
+                }
+                .rbc-time-header.rbc-overflowing {
+                    border-right: none !important;
+                }
+                .rbc-current-time-indicator {
+                    background-color: #ff4757;
+                }
+                .rbc-time-view {
+                    border: none !important;
+                }
+                .rbc-day-slot {
+                    background: transparent !important;
+                }
+
+                /* 隐藏不需要的全天事件行（空出的白条） */
+                .rbc-time-header .rbc-allday-cell {
+                    display: none !important;
+                }
+                .rbc-time-header-content {
+                    border-left: none !important;
+                }
+            `}</style>
         </div>
     );
 };

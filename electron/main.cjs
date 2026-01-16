@@ -15,7 +15,7 @@ function createWindow() {
             contextIsolation: true,
         },
         frame: false, // Frameless for custom UI
-        transparent: false,
+        transparent: true, // Enable transparency for shaped windows
         resizable: true,
         hasShadow: true,
         alwaysOnTop: false,
@@ -26,45 +26,87 @@ function createWindow() {
     const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:5173';
     mainWindow.loadURL(startUrl);
 
+    ipcMain.on('set-opacity', (event, opacity) => {
+        mainWindow.setOpacity(opacity);
+    });
+
     ipcMain.on('resize-window', (event, { width, height }) => {
         mainWindow.setSize(width, height);
     });
 
+    // Handler for improved mini-mode expansion
+    ipcMain.on('set-mini-expand', (event, expanded) => {
+        const { x, y, width, height } = mainWindow.getBounds();
+        const collapsedHeight = 50;
+        const expandedHeight = 200; // Enough space for slider
+
+        if (expanded) {
+            // Expand upwards: New Y = Current Y - (TargetHeight - CurrentHeight)
+            // But we must be careful. If we are already expanded, don't change.
+            if (height < expandedHeight) {
+                const newY = y - (expandedHeight - height);
+                mainWindow.setBounds({ x, y: newY, width, height: expandedHeight });
+            }
+        } else {
+            // Collapse downwards: New Y = Current Y + (CurrentHeight - TargetHeight)
+            if (height > collapsedHeight) {
+                const newY = y + (height - collapsedHeight);
+                mainWindow.setBounds({ x, y: newY, width, height: collapsedHeight });
+            }
+        }
+    });
+
     ipcMain.on('set-mini-mode', (event, isMini) => {
         if (isMini) {
-            mainWindow.setSize(260, 50); // Slimmer bar shape
+            const { x, y, width, height } = mainWindow.getBounds();
+            const miniWidth = 260;
+            const miniHeight = 50;
+
+            // Calculate new position: Bottom-Left alignment
+            let newX = x;
+            let newY = y + height - miniHeight;
+
+            // Ensure it stays within screen bounds
+            const display = screen.getDisplayMatching({ x, y, width, height });
+            const { x: bx, y: by, width: bw, height: bh } = display.workArea;
+
+            // Clamp X
+            if (newX < bx) newX = bx;
+            if (newX + miniWidth > bx + bw) newX = bx + bw - miniWidth;
+
+            // Clamp Y
+            if (newY < by) newY = by;
+            if (newY + miniHeight > by + bh) newY = by + bh - miniHeight;
+
+            mainWindow.setBounds({ x: newX, y: newY, width: miniWidth, height: miniHeight });
             mainWindow.setAlwaysOnTop(true, 'screen-saver');
         } else {
             const width = 500;
             const height = 720;
 
-            // Get current position to keep it roughly where the user left it
-            let { x, y } = mainWindow.getBounds();
+            // Get current mini window position
+            const { x, y, width: miniWidth, height: miniHeight } = mainWindow.getBounds();
 
-            // Get the screen where the window currently is
-            const display = screen.getDisplayMatching({ x, y, width: 260, height: 50 });
+            // Calculate new position: Bottom-Left alignment
+            // Main window's bottom-left should match Mini window's bottom-left
+            // newX = x
+            // newY + height = y + miniHeight => newY = y + miniHeight - height
+            let newX = x;
+            let newY = y + miniHeight - height;
+
+            // Ensure it stays within screen bounds
+            const display = screen.getDisplayMatching({ x, y, width: miniWidth, height: miniHeight });
             const { x: bx, y: by, width: bw, height: bh } = display.workArea;
 
-            // Adjust X if it goes off the right edge
-            if (x + width > bx + bw) {
-                x = bx + bw - width;
-            }
-            // Adjust X if it goes off the left edge (unlikely but safe)
-            if (x < bx) {
-                x = bx;
-            }
+            // Clamp X
+            if (newX < bx) newX = bx;
+            if (newX + width > bx + bw) newX = bx + bw - width;
 
-            // Adjust Y if it goes off the bottom edge
-            if (y + height > by + bh) {
-                y = by + bh - height;
-            }
-            // Adjust Y if it goes off the top edge
-            if (y < by) {
-                y = by;
-            }
+            // Clamp Y
+            if (newY < by) newY = by;
+            if (newY + height > by + bh) newY = by + bh - height;
 
-            // Apply safe bounds
-            mainWindow.setBounds({ x, y, width, height });
+            mainWindow.setBounds({ x: newX, y: newY, width, height });
             mainWindow.setAlwaysOnTop(false);
         }
     });

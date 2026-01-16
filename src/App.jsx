@@ -12,13 +12,21 @@ function App() {
     setViewMode(mode);
     if (window.electron) {
       window.electron.setMiniMode(mode === 'mini');
+      // Always reset opacity to 1.0 when returning to full view
+      if (mode === 'full') {
+        window.electron.setOpacity(1);
+      }
     }
   };
 
   return (
     <TimerProvider>
       <div className="app-wrapper" style={{
-        height: '100vh', width: '100%', display: 'flex', flexDirection: 'column'
+        height: '100vh',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: viewMode === 'full' ? 'var(--bg-color)' : 'transparent'
       }}>
         {viewMode === 'full' && <TitleBar />}
 

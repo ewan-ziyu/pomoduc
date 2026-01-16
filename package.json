@@ -14,8 +14,10 @@
   },
   "dependencies": {
     "cross-env": "^10.1.0",
+    "date-fns": "^4.1.0",
     "lucide-react": "^0.561.0",
     "react": "^19.2.0",
+    "react-big-calendar": "^1.19.4",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {

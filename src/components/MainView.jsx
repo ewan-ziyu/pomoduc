@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Pause, RotateCcw, Plus, Trash2, Settings, ExternalLink, BarChart2 } from 'lucide-react';
+import { Play, Pause, RotateCcw, Plus, Trash2, Settings, SquareArrowOutDownLeft, ChartColumnBig, Clock } from 'lucide-react';
 import { useTimer } from '../context/TimerContext';
 import { formatTime, formatDuration } from '../utils/formatTime';
 import SettingsModal from './SettingsModal';
@@ -25,6 +25,20 @@ const MainView = ({ onSwitchMode }) => {
         }
     };
 
+    const iconBtnStyle = {
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '6px',
+        borderRadius: '8px',
+        transition: 'all 0.2s',
+        color: 'var(--text-color)',
+        opacity: 0.8
+    };
+
     return (
         <div className="app-container" style={{ minHeight: '600px', display: 'flex', flexDirection: 'column' }}>
             {/* Header */}
@@ -32,16 +46,29 @@ const MainView = ({ onSwitchMode }) => {
                 <h1 style={{ fontSize: '1.25rem', fontWeight: 600 }}>
                     {view === 'stats' ? 'Statistics' : (mode === 'break' ? 'Break Time' : 'Pomodoro')}
                 </h1>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => setView(view === 'timer' ? 'stats' : 'timer')} title={view === 'timer' ? "View Stats" : "Back to Timer"}>
-                        {view === 'timer' ? <BarChart2 size={20} color="var(--text-color)" /> : <RotateCcw size={20} color="var(--text-color)" />}
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                        onClick={() => setView(view === 'timer' ? 'stats' : 'timer')}
+                        title={view === 'timer' ? "View Stats" : "Back to Timer"}
+                        className="header-icon-btn"
+                        style={iconBtnStyle}
+                    >
+                        {view === 'timer' ? <ChartColumnBig size={20} /> : <Clock size={20} />}
                     </button>
-                    {/* Only show MiniMode in Timer View usually, but okay here too */}
-                    <button onClick={onSwitchMode} title="Mini Mode">
-                        <ExternalLink size={20} color="var(--text-color)" />
+                    <button
+                        onClick={onSwitchMode}
+                        title="Mini Mode"
+                        className="header-icon-btn"
+                        style={iconBtnStyle}
+                    >
+                        <SquareArrowOutDownLeft size={20} />
                     </button>
-                    <button onClick={() => setIsSettingsOpen(true)}>
-                        <Settings size={20} color="var(--text-color)" />
+                    <button
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="header-icon-btn"
+                        style={iconBtnStyle}
+                    >
+                        <Settings size={20} />
                     </button>
                 </div>
             </header>
@@ -150,6 +177,17 @@ const MainView = ({ onSwitchMode }) => {
                 </>
             )}
 
+            <style>{`
+                .header-icon-btn:hover {
+                    background: #f0f0f0 !important;
+                    opacity: 1 !important;
+                    transform: translateY(-1px);
+                }
+                .header-icon-btn:active {
+                    transform: translateY(0);
+                    background: #e8e8e8 !important;
+                }
+            `}</style>
             <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
         </div>
     );

@@ -58,6 +58,8 @@ const SettingsModal = ({ isOpen, onClose }) => {
                     />
                 </div>
 
+
+                {/*
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
                         Day Start Time (Current: {localSettings.dayStart})
@@ -72,6 +74,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
                         }}
                     />
                 </div>
+                */}
 
                 <button onClick={handleSave} style={{
                     width: '100%', padding: '0.75rem', background: 'var(--text-color)', color: 'white',
