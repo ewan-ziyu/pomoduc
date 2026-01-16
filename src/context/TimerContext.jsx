@@ -12,39 +12,46 @@ const DEFAULT_SETTINGS = {
 };
 
 export const TimerProvider = ({ children }) => {
+  // Helper for safe JSON parsing
+  const safeParse = (key, fallback) => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved ? JSON.parse(saved) : fallback;
+    } catch (e) {
+      console.error(`Error parsing localStorage key "${key}":`, e);
+      return fallback;
+    }
+  };
+
   // Settings
   const [settings, setSettings] = useState(() => {
-    const saved = localStorage.getItem('pomoduc_settings');
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  });
+    const saved = safeParse('pomoduc_settings', DEFAULT_SETTINGS);
+    return { ...DEFAULT_SETTINGS, ...saved };
+  }
+  );
 
   // Tasks
-  const [tasks, setTasks] = useState(() => {
-    const saved = localStorage.getItem('pomoduc_tasks');
-    // Default "General" task if none
-    return saved ? JSON.parse(saved) : [{ id: 1, name: 'General', color: '#ff6b6b' }];
-  });
-  const [activeTaskId, setActiveTaskId] = useState(() => {
-    const saved = localStorage.getItem('pomoduc_active_task');
-    return saved ? JSON.parse(saved) : 1;
-  });
+  const [tasks, setTasks] = useState(() =>
+    safeParse('pomoduc_tasks', [{ id: 1, name: 'General', color: '#ff6b6b' }])
+  );
+  const [activeTaskId, setActiveTaskId] = useState(() =>
+    safeParse('pomoduc_active_task', 1)
+  );
 
   // Stats
-  const [stats, setStats] = useState(() => {
-    const saved = localStorage.getItem('pomoduc_stats');
-    return saved ? JSON.parse(saved) : {
+  const [stats, setStats] = useState(() =>
+    safeParse('pomoduc_stats', {
       date: new Date().toLocaleDateString(),
       totalPomodoros: 0,
       totalMinutes: 0,
       byTask: {}
-    };
-  });
+    })
+  );
 
   // History
-  const [history, setHistory] = useState(() => {
-    const saved = localStorage.getItem('pomoduc_history');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [history, setHistory] = useState(() =>
+    safeParse('pomoduc_history', [])
+  );
 
   // Timer State
   const [timeLeft, setTimeLeft] = useState(settings.focusDuration * 60);
@@ -195,6 +202,94 @@ export const TimerProvider = ({ children }) => {
     }
   };
 
+  const manualAddRecord = (record) => {
+    // record: { startTime, endTime, taskId, taskName, duration }
+    const newRecord = {
+      id: Date.now(),
+      ...record
+    };
+
+    setHistory(prev => [...prev, newRecord]);
+
+    // Update daily stats if the record is for the current business date
+    const recordDate = new Date(record.startTime).toLocaleDateString();
+    const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+    if (recordDate === currentBusinessDate) {
+      setStats(prev => {
+        const newByTask = { ...prev.byTask };
+        newByTask[record.taskId] = (newByTask[record.taskId] || 0) + record.duration;
+
+        return {
+          ...prev,
+          totalPomodoros: prev.totalPomodoros + 1,
+          totalMinutes: prev.totalMinutes + record.duration,
+          byTask: newByTask
+        };
+      });
+    }
+  };
+
+  const updateRecord = (id, updates) => {
+    // updates: { startTime, endTime, duration }
+    const recordToUpdate = history.find(r => r.id === id);
+    if (!recordToUpdate) return;
+
+    const oldDuration = recordToUpdate.duration || 0;
+    const newDuration = updates.duration;
+    const durationDiff = newDuration - oldDuration;
+
+    // Update history
+    setHistory(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
+
+    // Update daily stats if the record is for the current business date
+    const recordDate = new Date(recordToUpdate.startTime).toLocaleDateString();
+    const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+    if (recordDate === currentBusinessDate) {
+      setStats(prev => {
+        const newByTask = { ...prev.byTask };
+        newByTask[recordToUpdate.taskId] = Math.max(0, (newByTask[recordToUpdate.taskId] || 0) + durationDiff);
+
+        return {
+          ...prev,
+          totalMinutes: Math.max(0, prev.totalMinutes + durationDiff),
+          byTask: newByTask
+        };
+      });
+    }
+  };
+
+  const deleteRecord = (id) => {
+    const recordToDelete = history.find(r => r.id === id);
+    if (!recordToDelete) return;
+
+    // Remove from history
+    setHistory(prev => prev.filter(r => r.id !== id));
+
+    // Update daily stats if the record is for the current business date
+    const recordDate = new Date(recordToDelete.startTime).toLocaleDateString();
+    const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+    if (recordDate === currentBusinessDate) {
+      setStats(prev => {
+        const newByTask = { ...prev.byTask };
+        const duration = recordToDelete.duration || 0;
+
+        if (newByTask[recordToDelete.taskId]) {
+          newByTask[recordToDelete.taskId] = Math.max(0, newByTask[recordToDelete.taskId] - duration);
+        }
+
+        return {
+          ...prev,
+          totalPomodoros: Math.max(0, prev.totalPomodoros - 1),
+          totalMinutes: Math.max(0, prev.totalMinutes - duration),
+          byTask: newByTask
+        };
+      });
+    }
+  };
+
   const getActiveTask = () => tasks.find(t => t.id === activeTaskId) || tasks[0];
 
   return (
@@ -202,7 +297,7 @@ export const TimerProvider = ({ children }) => {
       settings, setSettings,
       tasks, addTask, deleteTask,
       activeTaskId, setActiveTaskId, getActiveTask,
-      stats, history,
+      stats, history, manualAddRecord, deleteRecord, updateRecord,
       timeLeft, isActive, toggleTimer, resetTimer, mode
     }}>
       {children}

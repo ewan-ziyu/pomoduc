@@ -5,6 +5,10 @@ import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay, addDays } from 'date-fns';
 import { zhCN, enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
+import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
+
+const DragAndDropCalendar = withDragAndDrop(Calendar);
 
 const locales = {
     'en-US': enUS,
@@ -20,11 +24,20 @@ const localizer = dateFnsLocalizer({
 });
 
 const StatsView = () => {
-    const { history, settings } = useTimer();
+    const { history, settings, tasks, manualAddRecord, deleteRecord, updateRecord } = useTimer();
     const [view, setView] = useState(Views.DAY);
     const [date, setDate] = useState(new Date());
     const [zoomLevel, setZoomLevel] = useState(1); // 1 = 1x, up to 5x
     const calendarWrapperRef = useRef(null);
+
+    // Manual Entry State
+    const [showManualModal, setShowManualModal] = useState(false);
+    const [manualEntry, setManualEntry] = useState(null);
+    const [selectedTaskId, setSelectedTaskId] = useState('');
+
+    // Delete Modal State
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [selectedEvent, setSelectedEvent] = useState(null);
 
     // Transform history to RBC events
     const events = useMemo(() => {
@@ -39,6 +52,73 @@ const StatsView = () => {
 
     const handleNavigate = useCallback((newDate) => setDate(newDate), []);
     const handleViewChange = useCallback((newView) => setView(newView), []);
+
+    const handleSelectSlot = useCallback(({ start, end }) => {
+        // Only allow manual entry in Daily view for better UX
+        if (view !== Views.DAY) return;
+
+        setManualEntry({ start, end });
+        if (tasks.length > 0) {
+            setSelectedTaskId(tasks[0].id.toString());
+        }
+        setShowManualModal(true);
+    }, [view, tasks]);
+
+    const handleManualSubmit = () => {
+        if (!selectedTaskId || !manualEntry) return;
+
+        const task = tasks.find(t => t.id.toString() === selectedTaskId);
+        const duration = Math.round((manualEntry.end - manualEntry.start) / 60000);
+
+        if (duration <= 0) return;
+
+        manualAddRecord({
+            startTime: manualEntry.start.toISOString(),
+            endTime: manualEntry.end.toISOString(),
+            taskId: task.id,
+            taskName: task.name,
+            duration: duration
+        });
+
+        setShowManualModal(false);
+        setManualEntry(null);
+    };
+
+    const handleDoubleClickEvent = useCallback((event) => {
+        setSelectedEvent(event);
+        setShowDeleteModal(true);
+    }, []);
+
+    const handleDeleteRecord = () => {
+        if (selectedEvent) {
+            deleteRecord(selectedEvent.id);
+            setShowDeleteModal(false);
+            setSelectedEvent(null);
+        }
+    };
+
+    const handleEventResize = useCallback(({ event, start, end }) => {
+        const duration = Math.round((end - start) / 60000);
+        if (duration <= 0) return;
+
+        updateRecord(event.id, {
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            duration: duration
+        });
+    }, [updateRecord]);
+
+    const handleEventDrop = useCallback(({ event, start, end }) => {
+        const duration = event.resource.duration; // Keep existing duration on move
+        // OR recalculate if needed, but usually drop just changes start/end
+        const newDuration = Math.round((end - start) / 60000);
+
+        updateRecord(event.id, {
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            duration: newDuration
+        });
+    }, [updateRecord]);
 
     // Date Navigation Handlers
     const goToPrev = () => setDate(prev => addDays(prev, view === Views.DAY ? -1 : -7));
@@ -170,7 +250,7 @@ const StatsView = () => {
 
             {/* Calendar Wrapper */}
             <div ref={calendarWrapperRef} className="calendar-wrapper" style={calendarStyles}>
-                <Calendar
+                <DragAndDropCalendar
                     localizer={localizer}
                     events={events}
                     startAccessor="start"
@@ -185,6 +265,13 @@ const StatsView = () => {
                     timeslots={4}
                     min={minDate}
                     max={maxDate}
+                    selectable={true}
+                    resizable={true}
+                    onSelectSlot={handleSelectSlot}
+                    onDoubleClickEvent={handleDoubleClickEvent}
+                    onEventResize={handleEventResize}
+                    onEventDrop={handleEventDrop}
+                    draggableAccessor={() => true}
                     components={{
                         event: ({ event }) => (
                             <div className="custom-event" title={`${event.title}: ${format(event.start, 'HH:mm')} - ${format(event.end, 'HH:mm')}`}>
@@ -195,6 +282,163 @@ const StatsView = () => {
                     }}
                 />
             </div>
+
+            {/* Manual Entry Modal Overlay */}
+            {showManualModal && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                    backdropFilter: 'blur(2px)'
+                }}>
+                    <div style={{
+                        background: 'var(--bg-color)',
+                        padding: '1.5rem',
+                        borderRadius: '12px',
+                        width: '300px',
+                        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.1)'
+                    }}>
+                        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem' }}>Add Focus Session</h3>
+
+                        <div style={{ marginBottom: '1rem' }}>
+                            <label style={{ display: 'block', fontSize: '0.8rem', color: '#888', marginBottom: '4px' }}>Time Range</label>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                                {format(manualEntry.start, 'HH:mm')} - {format(manualEntry.end, 'HH:mm')}
+                                <span style={{ marginLeft: '8px', color: '#888', fontWeight: 400 }}>
+                                    ({Math.round((manualEntry.end - manualEntry.start) / 60000)} mins)
+                                </span>
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={{ display: 'block', fontSize: '0.8rem', color: '#888', marginBottom: '4px' }}>Task Category</label>
+                            <select
+                                value={selectedTaskId}
+                                onChange={(e) => setSelectedTaskId(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #ddd',
+                                    background: 'var(--bg-color)',
+                                    color: 'var(--text-color)',
+                                    outline: 'none'
+                                }}
+                            >
+                                {tasks.map(t => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => setShowManualModal(false)}
+                                style={{
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #ddd',
+                                    background: 'none',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleManualSubmit}
+                                style={{
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    border: 'none',
+                                    background: 'var(--text-color)',
+                                    color: 'white',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Add Session
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal Overlay */}
+            {showDeleteModal && selectedEvent && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                    backdropFilter: 'blur(2px)'
+                }}>
+                    <div style={{
+                        background: 'var(--bg-color)',
+                        padding: '1.5rem',
+                        borderRadius: '12px',
+                        width: '300px',
+                        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.1)'
+                    }}>
+                        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem' }}>Delete Session?</h3>
+
+                        <div style={{ marginBottom: '1rem' }}>
+                            <div style={{ fontSize: '0.9rem', marginBottom: '4px' }}>
+                                <strong>Task:</strong> {selectedEvent.title}
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: '#888' }}>
+                                {format(selectedEvent.start, 'HH:mm')} - {format(selectedEvent.end, 'HH:mm')}
+                            </div>
+                        </div>
+
+                        <p style={{ fontSize: '0.7rem', color: '#f88585ff', marginBottom: '1.5rem' }}>
+                            This will remove this session from your history and statistics.
+                        </p>
+
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => setShowDeleteModal(false)}
+                                style={{
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #ddd',
+                                    background: 'none',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteRecord}
+                                autoFocus
+                                style={{
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    border: 'none',
+                                    background: '#ef4444',
+                                    color: 'white',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <style>{`
                 .view-btn {
