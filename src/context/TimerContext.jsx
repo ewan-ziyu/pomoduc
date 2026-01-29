@@ -5,302 +5,385 @@ const TimerContext = createContext();
 export const useTimer = () => useContext(TimerContext);
 
 const DEFAULT_SETTINGS = {
-  focusDuration: 25,
-  breakDuration: 4,
-  dayStart: "00:00",
-  dayEnd: "23:59"
+    focusDuration: 25,
+    breakDuration: 4,
+    dayStart: "00:00",
+    dayEnd: "23:59"
 };
 
 export const TimerProvider = ({ children }) => {
-  // Helper for safe JSON parsing
-  const safeParse = (key, fallback) => {
-    try {
-      const saved = localStorage.getItem(key);
-      return saved ? JSON.parse(saved) : fallback;
-    } catch (e) {
-      console.error(`Error parsing localStorage key "${key}":`, e);
-      return fallback;
-    }
-  };
+    const [loading, setLoading] = useState(true);
 
-  // Settings
-  const [settings, setSettings] = useState(() => {
-    const saved = safeParse('pomoduc_settings', DEFAULT_SETTINGS);
-    return { ...DEFAULT_SETTINGS, ...saved };
-  }
-  );
+    // Settings
+    const [settings, setSettingsState] = useState(DEFAULT_SETTINGS);
 
-  // Tasks
-  const [tasks, setTasks] = useState(() =>
-    safeParse('pomoduc_tasks', [{ id: 1, name: 'General', color: '#ff6b6b' }])
-  );
-  const [activeTaskId, setActiveTaskId] = useState(() =>
-    safeParse('pomoduc_active_task', 1)
-  );
+    // Tasks
+    const [tasks, setTasksState] = useState([{ id: 1, name: 'General', color: '#ff6b6b' }]);
+    const [activeTaskId, setActiveTaskId] = useState(1);
 
-  // Stats
-  const [stats, setStats] = useState(() =>
-    safeParse('pomoduc_stats', {
-      date: new Date().toLocaleDateString(),
-      totalPomodoros: 0,
-      totalMinutes: 0,
-      byTask: {}
-    })
-  );
-
-  // History
-  const [history, setHistory] = useState(() =>
-    safeParse('pomoduc_history', [])
-  );
-
-  // Timer State
-  const [timeLeft, setTimeLeft] = useState(settings.focusDuration * 60);
-  const [isActive, setIsActive] = useState(false);
-  const [mode, setMode] = useState('focus'); // 'focus' | 'break' (optional ext)
-
-  const timerRef = useRef(null);
-
-  // Persistence Effects
-  useEffect(() => localStorage.setItem('pomoduc_settings', JSON.stringify(settings)), [settings]);
-  useEffect(() => localStorage.setItem('pomoduc_tasks', JSON.stringify(tasks)), [tasks]);
-  useEffect(() => localStorage.setItem('pomoduc_active_task', JSON.stringify(activeTaskId)), [activeTaskId]);
-  useEffect(() => localStorage.setItem('pomoduc_stats', JSON.stringify(stats)), [stats]);
-  useEffect(() => localStorage.setItem('pomoduc_history', JSON.stringify(history)), [history]);
-
-  // Reset timer when settings change (if not active)
-  useEffect(() => {
-    if (!isActive) {
-      if (mode === 'focus') setTimeLeft(settings.focusDuration * 60);
-      if (mode === 'break') setTimeLeft(settings.breakDuration * 60);
-    }
-  }, [settings.focusDuration, settings.breakDuration, mode]);
-
-  // Helper to get the "business date" based on dayStart
-  const getBusinessDate = (startStr) => {
-    if (!startStr) return new Date().toLocaleDateString();
-    const now = new Date();
-    const [h, m] = startStr.split(':').map(Number);
-    const splitTime = new Date(now);
-    splitTime.setHours(h, m || 0, 0, 0);
-
-    // If now is before the split time, it belongs to the previous day
-    if (now < splitTime) {
-      const prevDay = new Date(now);
-      prevDay.setDate(prevDay.getDate() - 1);
-      return prevDay.toLocaleDateString();
-    }
-    return now.toLocaleDateString();
-  };
-
-  // Check new day for stats
-  useEffect(() => {
-    const currentBusinessDate = getBusinessDate(settings.dayStart);
-    if (stats.date !== currentBusinessDate) {
-      setStats({
-        date: currentBusinessDate,
+    // Stats
+    const [stats, setStatsState] = useState({
+        date: new Date().toLocaleDateString(),
         totalPomodoros: 0,
         totalMinutes: 0,
         byTask: {}
-      });
-    }
-  }, [settings.dayStart]); // Check when settings change or on mount (interval?)
-
-  // In a real app, we might want an interval to check for day rollover, 
-  // but for now checking on specific actions or mount is okay.
-  // Let's add an interval to check every minute for rollover
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const currentBusinessDate = getBusinessDate(settings.dayStart);
-      if (stats.date !== currentBusinessDate) {
-        setStats(prev => ({
-          date: currentBusinessDate,
-          totalPomodoros: 0,
-          totalMinutes: 0,
-          byTask: {}
-        }));
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [stats.date, settings.dayStart]);
-
-
-  const toggleTimer = () => setIsActive(!isActive);
-
-  const resetTimer = () => {
-    setIsActive(false);
-    // Always switch to focus mode on reset/loop click
-    setMode('focus');
-    setTimeLeft(settings.focusDuration * 60);
-  };
-
-  const updateStats = () => {
-    // Rule: Work time less than 10 minutes is not included in stats
-    // Rule: Break time is not included (covered by mode check)
-    if (mode !== 'focus' || settings.focusDuration < 10) return;
-
-    // Create history record
-    const now = new Date();
-    const taskDuration = settings.focusDuration;
-    const activeTaskObj = tasks.find(t => t.id === activeTaskId) || { name: 'Unknown' };
-
-    const newRecord = {
-      id: Date.now(),
-      endTime: now.toISOString(),
-      startTime: new Date(now.getTime() - taskDuration * 60000).toISOString(),
-      duration: taskDuration, // in minutes
-      taskId: activeTaskId,
-      taskName: activeTaskObj.name
-    };
-
-    setHistory(prev => [...prev, newRecord]);
-
-    // Update daily stats (legacy support + optimization)
-    setStats(prev => {
-      const newByTask = { ...prev.byTask };
-      newByTask[activeTaskId] = (newByTask[activeTaskId] || 0) + taskDuration;
-
-      return {
-        ...prev,
-        totalPomodoros: prev.totalPomodoros + 1,
-        totalMinutes: prev.totalMinutes + taskDuration,
-        byTask: newByTask
-      };
     });
-  };
 
-  useEffect(() => {
-    if (isActive && timeLeft > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0 && isActive) {
-      // Timer finished
-      setIsActive(false);
-      updateStats(); // This function now needs to check mode internally or be moved
+    // History
+    const [history, setHistoryState] = useState([]);
 
-      // Switch Mode Logic
-      const nextMode = mode === 'focus' ? 'break' : 'focus';
-      setMode(nextMode);
-      const nextDuration = nextMode === 'focus' ? settings.focusDuration : settings.breakDuration;
-      setTimeLeft(nextDuration * 60);
-    }
+    // Timer State
+    const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.focusDuration * 60);
+    const [isActive, setIsActive] = useState(false);
+    const [mode, setMode] = useState('focus'); // 'focus' | 'break'
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-    return () => clearInterval(timerRef.current);
-  }, [isActive, timeLeft, activeTaskId, mode, settings]);
+    const timerRef = useRef(null);
 
-  const addTask = (name, color) => {
-    const newTask = { id: Date.now(), name, color };
-    setTasks([...tasks, newTask]);
-    // Auto-select new task?
-    // setActiveTaskId(newTask.id); 
-  };
+    // Helper to get the "business date"
+    const getBusinessDate = (startStr) => {
+        if (!startStr) return new Date().toLocaleDateString();
+        const now = new Date();
+        const [h, m] = startStr.split(':').map(Number);
+        const splitTime = new Date(now);
+        splitTime.setHours(h, m || 0, 0, 0);
 
-  const deleteTask = (id) => {
-    setTasks(tasks.filter(t => t.id !== id));
-    if (activeTaskId === id && tasks.length > 0) {
-      setActiveTaskId(tasks[0].id);
-    }
-  };
-
-  const manualAddRecord = (record) => {
-    // record: { startTime, endTime, taskId, taskName, duration }
-    const newRecord = {
-      id: Date.now(),
-      ...record
+        if (now < splitTime) {
+            const prevDay = new Date(now);
+            prevDay.setDate(prevDay.getDate() - 1);
+            return prevDay.toLocaleDateString();
+        }
+        return now.toLocaleDateString();
     };
 
-    setHistory(prev => [...prev, newRecord]);
+    // Initialize DB and Migration
+    useEffect(() => {
+        const initData = async () => {
+            try {
+                if (!window.electron || !window.electron.db) {
+                    console.warn('Electron DB not found, falling back to defaults (likely dev browser)');
+                    setLoading(false);
+                    return;
+                }
 
-    // Update daily stats if the record is for the current business date
-    const recordDate = new Date(record.startTime).toLocaleDateString();
-    const currentBusinessDate = getBusinessDate(settings.dayStart);
+                let dbSettings = await window.electron.db.getSettings();
+                const hasLocalStorage = localStorage.getItem('pomoduc_settings') || localStorage.getItem('pomoduc_history');
 
-    if (recordDate === currentBusinessDate) {
-      setStats(prev => {
-        const newByTask = { ...prev.byTask };
-        newByTask[record.taskId] = (newByTask[record.taskId] || 0) + record.duration;
+                // Migration logic
+                if (!dbSettings && hasLocalStorage) {
+                    console.log('Migrating localStorage to SQLite...');
+                    const legacyHistory = JSON.parse(localStorage.getItem('pomoduc_history') || '[]');
+                    const legacyTasks = JSON.parse(localStorage.getItem('pomoduc_tasks') || '[]');
+                    const legacySettings = JSON.parse(localStorage.getItem('pomoduc_settings') || 'null');
+                    const legacyStats = JSON.parse(localStorage.getItem('pomoduc_stats') || 'null');
 
-        return {
-          ...prev,
-          totalPomodoros: prev.totalPomodoros + 1,
-          totalMinutes: prev.totalMinutes + record.duration,
-          byTask: newByTask
+                    await window.electron.db.bulkMigrate({
+                        history: legacyHistory,
+                        tasks: legacyTasks,
+                        settings: legacySettings,
+                        stats: legacyStats
+                    });
+
+                    dbSettings = await window.electron.db.getSettings();
+
+                    // Clear legacy data
+                    localStorage.removeItem('pomoduc_settings');
+                    localStorage.removeItem('pomoduc_tasks');
+                    localStorage.removeItem('pomoduc_history');
+                    localStorage.removeItem('pomoduc_stats');
+                    localStorage.removeItem('pomoduc_active_task');
+                }
+
+                if (dbSettings) setSettingsState({ ...DEFAULT_SETTINGS, ...dbSettings });
+
+                const dbTasks = await window.electron.db.getTasks();
+                if (dbTasks && dbTasks.length > 0) setTasksState(dbTasks);
+
+                const dbHistory = await window.electron.db.getHistory();
+                if (dbHistory) setHistoryState(dbHistory);
+
+                const currentBusinessDate = getBusinessDate(dbSettings?.dayStart || DEFAULT_SETTINGS.dayStart);
+                const dbStats = await window.electron.db.getStats(currentBusinessDate);
+                if (dbStats) {
+                    setStatsState(dbStats);
+                } else {
+                    setStatsState({
+                        date: currentBusinessDate,
+                        totalPomodoros: 0,
+                        totalMinutes: 0,
+                        byTask: {}
+                    });
+                }
+
+                // Active Task (kept in localStorage for simplicity as it's session-local, or we could move to DB)
+                const savedActiveId = localStorage.getItem('pomoduc_active_task');
+                if (savedActiveId) setActiveTaskId(JSON.parse(savedActiveId));
+
+                // Initial Timer Sync
+                const finalFocus = dbSettings?.focusDuration || DEFAULT_SETTINGS.focusDuration;
+                setTimeLeft(finalFocus * 60);
+
+            } catch (err) {
+                console.error('Failed to initialize database:', err);
+            } finally {
+                setLoading(false);
+            }
         };
-      });
-    }
-  };
 
-  const updateRecord = (id, updates) => {
-    // updates: { startTime, endTime, duration }
-    const recordToUpdate = history.find(r => r.id === id);
-    if (!recordToUpdate) return;
+        initData();
+    }, []);
 
-    const oldDuration = recordToUpdate.duration || 0;
-    const newDuration = updates.duration;
-    const durationDiff = newDuration - oldDuration;
+    // Sync activeTaskId to localStorage (UI session state)
+    useEffect(() => {
+        if (!loading) {
+            localStorage.setItem('pomoduc_active_task', JSON.stringify(activeTaskId));
+        }
+    }, [activeTaskId, loading]);
 
-    // Update history
-    setHistory(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
+    // Sync methods (Wrappers to update DB and State)
+    const setSettings = async (newSettings) => {
+        setSettingsState(newSettings);
+        if (window.electron?.db) await window.electron.db.setSettings(newSettings);
+    };
 
-    // Update daily stats if the record is for the current business date
-    const recordDate = new Date(recordToUpdate.startTime).toLocaleDateString();
-    const currentBusinessDate = getBusinessDate(settings.dayStart);
+    const setTasks = async (newTasks) => {
+        setTasksState(newTasks);
+        if (window.electron?.db) await window.electron.db.setTasks(newTasks);
+    };
 
-    if (recordDate === currentBusinessDate) {
-      setStats(prev => {
-        const newByTask = { ...prev.byTask };
-        newByTask[recordToUpdate.taskId] = Math.max(0, (newByTask[recordToUpdate.taskId] || 0) + durationDiff);
+    const setStats = async (newStats) => {
+        if (typeof newStats === 'function') {
+            setStatsState(prev => {
+                const next = newStats(prev);
+                if (window.electron?.db) window.electron.db.updateStats(next);
+                return next;
+            });
+        } else {
+            setStatsState(newStats);
+            if (window.electron?.db) await window.electron.db.updateStats(newStats);
+        }
+    };
 
-        return {
-          ...prev,
-          totalMinutes: Math.max(0, prev.totalMinutes + durationDiff),
-          byTask: newByTask
+    // Reset timer when settings change (if not active)
+    useEffect(() => {
+        if (!isActive) {
+            if (mode === 'focus') setTimeLeft(settings.focusDuration * 60);
+            if (mode === 'break') setTimeLeft(settings.breakDuration * 60);
+        }
+    }, [settings.focusDuration, settings.breakDuration, mode]);
+
+    // Check new day for stats
+    useEffect(() => {
+        const checkRollover = async () => {
+            const currentBusinessDate = getBusinessDate(settings.dayStart);
+            if (stats.date !== currentBusinessDate) {
+                const newStats = {
+                    date: currentBusinessDate,
+                    totalPomodoros: 0,
+                    totalMinutes: 0,
+                    byTask: {}
+                };
+                setStatsState(newStats);
+                if (window.electron?.db) await window.electron.db.updateStats(newStats);
+            }
         };
-      });
-    }
-  };
 
-  const deleteRecord = (id) => {
-    const recordToDelete = history.find(r => r.id === id);
-    if (!recordToDelete) return;
+        const interval = setInterval(checkRollover, 60000);
+        return () => clearInterval(interval);
+    }, [stats.date, settings.dayStart]);
 
-    // Remove from history
-    setHistory(prev => prev.filter(r => r.id !== id));
 
-    // Update daily stats if the record is for the current business date
-    const recordDate = new Date(recordToDelete.startTime).toLocaleDateString();
-    const currentBusinessDate = getBusinessDate(settings.dayStart);
+    const toggleTimer = () => {
+        if (isActive && mode === 'focus') {
+            const mins = Math.floor(elapsedSeconds / 60);
+            if (mins >= 10) {
+                updateStats(mins);
+            }
+        }
+        setIsActive(!isActive);
+    };
 
-    if (recordDate === currentBusinessDate) {
-      setStats(prev => {
-        const newByTask = { ...prev.byTask };
-        const duration = recordToDelete.duration || 0;
+    const resetTimer = () => {
+        if (mode === 'focus') {
+            const mins = Math.floor(elapsedSeconds / 60);
+            if (mins >= 10) {
+                updateStats(mins);
+            }
+        }
+        setIsActive(false);
+        setMode('focus');
+        setTimeLeft(settings.focusDuration * 60);
+        setElapsedSeconds(0);
+    };
 
-        if (newByTask[recordToDelete.taskId]) {
-          newByTask[recordToDelete.taskId] = Math.max(0, newByTask[recordToDelete.taskId] - duration);
+    const updateStats = async (providedDuration) => {
+        // If providedDuration is passed, use it, otherwise calculate from elapsedSeconds
+        // If it's a normal completion, providedDuration would be Math.floor(elapsedSeconds / 60)
+        const durationToRecord = providedDuration !== undefined ? providedDuration : Math.floor(elapsedSeconds / 60);
+
+        if (mode !== 'focus' || durationToRecord < 10) return;
+
+        const now = new Date();
+        const activeTaskObj = tasks.find(t => t.id === activeTaskId) || { name: 'Unknown' };
+
+        const newRecord = {
+            id: Date.now(),
+            endTime: now.toISOString(),
+            startTime: new Date(now.getTime() - durationToRecord * 60000).toISOString(),
+            duration: durationToRecord,
+            taskId: activeTaskId,
+            taskName: activeTaskObj.name
+        };
+
+        // Update History
+        setHistoryState(prev => [newRecord, ...prev]);
+        if (window.electron?.db) await window.electron.db.addHistory(newRecord);
+
+        // Update daily stats
+        const nextStats = { ...stats };
+        nextStats.byTask = { ...nextStats.byTask };
+        nextStats.byTask[activeTaskId] = (nextStats.byTask[activeTaskId] || 0) + durationToRecord;
+        nextStats.totalPomodoros += 1;
+        nextStats.totalMinutes += durationToRecord;
+
+        setStats(nextStats);
+        setElapsedSeconds(prev => Math.max(0, prev - durationToRecord * 60));
+    };
+
+    useEffect(() => {
+        if (isActive && timeLeft > 0) {
+            timerRef.current = setInterval(() => {
+                setTimeLeft((prev) => prev - 1);
+                if (mode === 'focus') {
+                    setElapsedSeconds(prev => prev + 1);
+                }
+            }, 1000);
+        } else if (timeLeft === 0 && isActive) {
+            setIsActive(false);
+            const finalMins = Math.floor(elapsedSeconds / 60);
+            updateStats(finalMins);
+
+            const nextMode = mode === 'focus' ? 'break' : 'focus';
+            setMode(nextMode);
+            const nextDuration = nextMode === 'focus' ? settings.focusDuration : settings.breakDuration;
+            setTimeLeft(nextDuration * 60);
+            setElapsedSeconds(0);
         }
 
-        return {
-          ...prev,
-          totalPomodoros: Math.max(0, prev.totalPomodoros - 1),
-          totalMinutes: Math.max(0, prev.totalMinutes - duration),
-          byTask: newByTask
+        return () => clearInterval(timerRef.current);
+    }, [isActive, timeLeft, activeTaskId, mode, settings, tasks, stats, elapsedSeconds]);
+
+    const addTask = async (name, color) => {
+        const newTask = { id: Date.now(), name, color };
+        const newTasks = [...tasks, newTask];
+        setTasks(newTasks);
+    };
+
+    const deleteTask = async (id) => {
+        const newTasks = tasks.filter(t => t.id !== id);
+        setTasks(newTasks);
+        if (activeTaskId === id && newTasks.length > 0) {
+            setActiveTaskId(newTasks[0].id);
+        }
+    };
+
+    const manualAddRecord = async (record) => {
+        const newRecord = {
+            id: Date.now(),
+            ...record
         };
-      });
+
+        setHistoryState(prev => [newRecord, ...prev]);
+        if (window.electron?.db) await window.electron.db.addHistory(newRecord);
+
+        const recordDate = new Date(record.startTime).toLocaleDateString();
+        const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+        if (recordDate === currentBusinessDate) {
+            const nextStats = { ...stats };
+            nextStats.byTask = { ...nextStats.byTask };
+            nextStats.byTask[record.taskId] = (nextStats.byTask[record.taskId] || 0) + record.duration;
+            nextStats.totalPomodoros += 1;
+            nextStats.totalMinutes += record.duration;
+            setStats(nextStats);
+        }
+    };
+
+    const updateRecord = async (id, updates) => {
+        const recordToUpdate = history.find(r => r.id === id);
+        if (!recordToUpdate) return;
+
+        const oldDuration = recordToUpdate.duration || 0;
+        const newDuration = updates.duration;
+        const durationDiff = newDuration - oldDuration;
+
+        setHistoryState(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
+        if (window.electron?.db) await window.electron.db.updateHistory(id, updates);
+
+        const recordDate = new Date(recordToUpdate.startTime).toLocaleDateString();
+        const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+        if (recordDate === currentBusinessDate) {
+            const nextStats = { ...stats };
+            nextStats.byTask = { ...nextStats.byTask };
+            nextStats.byTask[recordToUpdate.taskId] = Math.max(0, (nextStats.byTask[recordToUpdate.taskId] || 0) + durationDiff);
+            nextStats.totalMinutes = Math.max(0, nextStats.totalMinutes + durationDiff);
+            setStats(nextStats);
+        }
+    };
+
+    const deleteRecord = async (id) => {
+        const recordToDelete = history.find(r => r.id === id);
+        if (!recordToDelete) return;
+
+        setHistoryState(prev => prev.filter(r => r.id !== id));
+        if (window.electron?.db) await window.electron.db.deleteHistory(id);
+
+        const recordDate = new Date(recordToDelete.startTime).toLocaleDateString();
+        const currentBusinessDate = getBusinessDate(settings.dayStart);
+
+        if (recordDate === currentBusinessDate) {
+            const nextStats = { ...stats };
+            nextStats.byTask = { ...nextStats.byTask };
+            const duration = recordToDelete.duration || 0;
+
+            if (nextStats.byTask[recordToDelete.taskId]) {
+                nextStats.byTask[recordToDelete.taskId] = Math.max(0, nextStats.byTask[recordToDelete.taskId] - duration);
+            }
+
+            nextStats.totalPomodoros = Math.max(0, nextStats.totalPomodoros - 1);
+            nextStats.totalMinutes = Math.max(0, nextStats.totalMinutes - duration);
+            setStats(nextStats);
+        }
+    };
+
+    const getActiveTask = () => tasks.find(t => t.id === activeTaskId) || tasks[0];
+
+    if (loading) {
+        return (
+            <div style={{
+                height: '100vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#1a1a1a',
+                color: '#fff',
+                fontFamily: 'Inter, sans-serif'
+            }}>
+                Loading Database...
+            </div>
+        );
     }
-  };
 
-  const getActiveTask = () => tasks.find(t => t.id === activeTaskId) || tasks[0];
-
-  return (
-    <TimerContext.Provider value={{
-      settings, setSettings,
-      tasks, addTask, deleteTask,
-      activeTaskId, setActiveTaskId, getActiveTask,
-      stats, history, manualAddRecord, deleteRecord, updateRecord,
-      timeLeft, isActive, toggleTimer, resetTimer, mode
-    }}>
-      {children}
-    </TimerContext.Provider>
-  );
+    return (
+        <TimerContext.Provider value={{
+            settings, setSettings,
+            tasks, addTask, deleteTask,
+            activeTaskId, setActiveTaskId, getActiveTask,
+            stats, history, manualAddRecord, deleteRecord, updateRecord,
+            timeLeft, isActive, toggleTimer, resetTimer, mode
+        }}>
+            {children}
+        </TimerContext.Provider>
+    );
 };

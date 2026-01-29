@@ -1,5 +1,41 @@
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const path = require('path');
+const Database = require('better-sqlite3');
+const fs = require('fs');
+
+// Database Setup
+const dbPath = path.join(app.getPath('userData'), 'pomoduc.db');
+const db = new Database(dbPath);
+
+// Initialize Tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    data TEXT
+  );
+  
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    color TEXT
+  );
+  
+  CREATE TABLE IF NOT EXISTS history (
+    id INTEGER PRIMARY KEY,
+    startTime TEXT,
+    endTime TEXT,
+    duration INTEGER,
+    taskId INTEGER,
+    taskName TEXT
+  );
+  
+  CREATE TABLE IF NOT EXISTS stats (
+    date TEXT PRIMARY KEY,
+    totalPomodoros INTEGER,
+    totalMinutes INTEGER,
+    byTask TEXT
+  );
+`);
 
 let mainWindow;
 
@@ -23,7 +59,10 @@ function createWindow() {
     });
 
     // Load dev server or build
-    const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:5173';
+    const isDev = process.env.NODE_ENV === 'development';
+    const startUrl = isDev
+        ? (process.env.ELECTRON_START_URL || 'http://localhost:5177')
+        : `file://${path.join(__dirname, '../dist/index.html')}`;
     mainWindow.loadURL(startUrl);
 
     ipcMain.on('set-opacity', (event, opacity) => {
@@ -118,6 +157,104 @@ function createWindow() {
         else mainWindow.maximize();
     });
     ipcMain.on('close-window', () => mainWindow.close());
+
+    // --- Database IPC Handlers ---
+
+    // History
+    ipcMain.handle('db-get-history', () => {
+        return db.prepare('SELECT * FROM history ORDER BY id DESC').all();
+    });
+
+    ipcMain.handle('db-add-history', (event, record) => {
+        const { id, startTime, endTime, duration, taskId, taskName } = record;
+        const stmt = db.prepare('INSERT INTO history (id, startTime, endTime, duration, taskId, taskName) VALUES (?, ?, ?, ?, ?, ?)');
+        return stmt.run(id, startTime, endTime, duration, taskId, taskName);
+    });
+
+    ipcMain.handle('db-update-history', (event, id, updates) => {
+        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+        const values = Object.values(updates);
+        const stmt = db.prepare(`UPDATE history SET ${fields} WHERE id = ?`);
+        return stmt.run(...values, id);
+    });
+
+    ipcMain.handle('db-delete-history', (event, id) => {
+        return db.prepare('DELETE FROM history WHERE id = ?').run(id);
+    });
+
+    // Tasks
+    ipcMain.handle('db-get-tasks', () => {
+        return db.prepare('SELECT * FROM tasks').all();
+    });
+
+    ipcMain.handle('db-set-tasks', (event, tasks) => {
+        const deleteStmt = db.prepare('DELETE FROM tasks');
+        const insertStmt = db.prepare('INSERT INTO tasks (id, name, color) VALUES (?, ?, ?)');
+        const transaction = db.transaction((taskList) => {
+            deleteStmt.run();
+            for (const task of taskList) {
+                insertStmt.run(task.id, task.name, task.color);
+            }
+        });
+        return transaction(tasks);
+    });
+
+    // Settings
+    ipcMain.handle('db-get-settings', () => {
+        const row = db.prepare('SELECT data FROM settings WHERE id = 1').get();
+        return row ? JSON.parse(row.data) : null;
+    });
+
+    ipcMain.handle('db-set-settings', (event, settings) => {
+        const stmt = db.prepare('INSERT OR REPLACE INTO settings (id, data) VALUES (1, ?)');
+        return stmt.run(JSON.stringify(settings));
+    });
+
+    // Stats
+    ipcMain.handle('db-get-stats', (event, date) => {
+        const row = db.prepare('SELECT * FROM stats WHERE date = ?').get();
+        if (row) {
+            return {
+                ...row,
+                byTask: JSON.parse(row.byTask)
+            };
+        }
+        return null;
+    });
+
+    ipcMain.handle('db-update-stats', (event, stats) => {
+        const stmt = db.prepare('INSERT OR REPLACE INTO stats (date, totalPomodoros, totalMinutes, byTask) VALUES (?, ?, ?, ?)');
+        return stmt.run(stats.date, stats.totalPomodoros, stats.totalMinutes, JSON.stringify(stats.byTask));
+    });
+
+    // Bulk Migration Helper
+    ipcMain.handle('db-bulk-migrate', (event, data) => {
+        const { history, tasks, settings, stats } = data;
+        const transaction = db.transaction(() => {
+            // Settings
+            if (settings) {
+                db.prepare('INSERT OR REPLACE INTO settings (id, data) VALUES (1, ?)').run(JSON.stringify(settings));
+            }
+            // Tasks
+            if (tasks) {
+                db.prepare('DELETE FROM tasks').run();
+                const taskStmt = db.prepare('INSERT INTO tasks (id, name, color) VALUES (?, ?, ?)');
+                for (const t of tasks) taskStmt.run(t.id, t.name, t.color);
+            }
+            // History
+            if (history) {
+                db.prepare('DELETE FROM history').run();
+                const histStmt = db.prepare('INSERT INTO history (id, startTime, endTime, duration, taskId, taskName) VALUES (?, ?, ?, ?, ?, ?)');
+                for (const r of history) histStmt.run(r.id, r.startTime, r.endTime, r.duration, r.taskId, r.taskName);
+            }
+            // Stats (legacy/daily)
+            if (stats) {
+                db.prepare('INSERT OR REPLACE INTO stats (date, totalPomodoros, totalMinutes, byTask) VALUES (?, ?, ?, ?)')
+                    .run(stats.date, stats.totalPomodoros, stats.totalMinutes, JSON.stringify(stats.byTask));
+            }
+        });
+        return transaction();
+    });
 }
 
 app.whenReady().then(() => {

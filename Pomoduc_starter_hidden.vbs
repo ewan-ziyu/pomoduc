@@ -1,1 +1,0 @@
-CreateObject("Wscript.Shell").Run "cmd.exe /c app_starter.bat", 0, False

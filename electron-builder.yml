@@ -1,0 +1,19 @@
+appId: com.pomoduc.app
+productName: Pomoduc
+directories:
+  output: app-dist-v2
+copyright: Copyright © 2024 Pomoduc
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+  - index.html
+  - icon.png
+  - public/**/*
+  - node_modules/**/*
+win:
+  target: nsis
+  icon: icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
